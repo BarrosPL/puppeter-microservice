@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/', (req, res) => {
-  res.send('Puppeteer scraper with targeted extraction 🎯');
+  res.send('Puppeteer scraper with Anti-Captcha integration 🚀');
 });
 
 app.post('/scrape', async (req, res) => {
@@ -24,18 +24,27 @@ app.post('/scrape', async (req, res) => {
 
     const page = await browser.newPage();
     
-    // Configurar para bloquear recursos desnecessários
+    // ✅ CONFIGURAR BLOQUEIO DE RECURSOS DESNECESSÁRIOS
     await page.setRequestInterception(true);
     page.on('request', (request) => {
       const resourceType = request.resourceType();
-      // Bloquear imagens, fonts, media, stylesheets
-      if (['image', 'font', 'media', 'stylesheet'].includes(resourceType)) {
+      const requestUrl = request.url().toLowerCase();
+      
+      // Bloquear imagens, vídeos, fonts, CSS e arquivos baixáveis
+      const blockedTypes = ['image', 'media', 'font', 'stylesheet'];
+      const blockedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.avi', '.mov', '.pdf', '.zip', '.rar'];
+      
+      const isBlockedType = blockedTypes.includes(resourceType);
+      const isBlockedExtension = blockedExtensions.some(ext => requestUrl.includes(ext));
+      
+      if (isBlockedType || isBlockedExtension) {
         request.abort();
       } else {
         request.continue();
       }
     });
     
+    // Configurar user agent para parecer mais legítimo
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
     await page.goto(url, { 
@@ -43,7 +52,7 @@ app.post('/scrape', async (req, res) => {
       timeout: 30000 
     });
 
-    // ✅ DETECÇÃO DE CAPTCHA (código anterior mantido)
+    // ✅ DETECÇÃO AVANÇADA DE CAPTCHA
     const captchaInfo = await page.evaluate(() => {
       const captchaImage = document.querySelector('img[src*="captcha"], img[alt*="captcha"], img[src*="CAPTCHA"]');
       const captchaInput = document.querySelector('input[name*="captcha"], input[id*="captcha"], input[name*="Captcha"]');
@@ -57,7 +66,10 @@ app.post('/scrape', async (req, res) => {
       };
     });
 
-    // ✅ LÓGICA DE CAPTCHA (código anterior mantido)
+    console.log('🔍 CAPTCHA Analysis:', captchaInfo);
+    console.log('📝 Instructions:', instructions);
+
+    // ✅ SE TEM CAPTCHA COMPLEXO (reCAPTCHA), EVITAR
     if (captchaInfo.hasRecaptcha) {
       await browser.close();
       return res.json({ 
@@ -68,223 +80,159 @@ app.post('/scrape', async (req, res) => {
       });
     }
 
+    // ✅ SE TEM CAPTCHA SIMPLES
     if (captchaInfo.hasCaptcha) {
-      // ... (lógica de captcha mantida do código anterior)
+      console.log('🛡️ Simple CAPTCHA detected');
+      
+      if (captchaSolution) {
+        console.log('🔄 Applying CAPTCHA solution:', captchaSolution);
+        
+        const solutionResult = await page.evaluate((solution) => {
+          try {
+            const specificSelectors = [
+              'input[name="captcha"]',
+              'input[name="captcha_code"]',
+              'input[name="captcha_text"]',
+              'input[name="security_code"]',
+              'input[name="verification_code"]',
+              'input#captcha',
+              'input#captcha_code',
+              'textarea[name="captcha"]'
+            ];
+            
+            for (const selector of specificSelectors) {
+              const input = document.querySelector(selector);
+              if (input) {
+                input.value = solution;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                return { success: true, method: 'specific', field: selector };
+              }
+            }
+            
+            return { success: false, error: 'No suitable field found' };
+            
+          } catch (error) {
+            return { success: false, error: error.message };
+          }
+        }, captchaSolution);
+
+        console.log('🔧 Solution application result:', solutionResult);
+
+        if (solutionResult.success) {
+          await page.waitForTimeout(4000);
+          try {
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 });
+            console.log('✅ Navigation detected after CAPTCHA submission');
+          } catch (e) {
+            console.log('⚠️ No navigation detected, continuing...');
+          }
+        }
+      } else {
+        console.log('📸 Taking CAPTCHA screenshot for solving');
+        const screenshot = await page.screenshot({ 
+          encoding: 'base64',
+          fullPage: false
+        });
+        await browser.close();
+        return res.json({ 
+          captcha: true, 
+          screenshot,
+          captchaType: 'simple',
+          captchaInfo: captchaInfo,
+          message: 'Simple CAPTCHA detected - ready for solving'
+        });
+      }
     }
 
-    // ✅ EXTRAÇÃO INTELIGENTE BASEADA NAS INSTRUÇÕES
-    console.log('🎯 Extraindo informações específicas com instruções:', instructions);
+    // ✅ VERIFICAR SE CAPTCHA AINDA EXISTE APÓS TENTATIVA
+    const stillHasCaptcha = await page.evaluate(() => {
+      const currentText = document.body.innerText.toLowerCase();
+      const hasError = currentText.includes('invalid') || 
+                      currentText.includes('incorrect') || 
+                      currentText.includes('wrong') ||
+                      currentText.includes('error');
+      
+      const stillHasCaptchaElement = !!document.querySelector('img[src*="captcha"]') ||
+                                    currentText.includes('captcha');
+      
+      return hasError || stillHasCaptchaElement;
+    });
+
+    if (stillHasCaptcha) {
+      console.log('❌ CAPTCHA still present or incorrect solution');
+      const screenshot = await page.screenshot({ encoding: 'base64' });
+      await browser.close();
+      return res.json({ 
+        captcha: true, 
+        screenshot,
+        captchaType: 'simple',
+        captchaSolutionUsed: !!captchaSolution,
+        message: 'CAPTCHA still present after solution attempt'
+      });
+    }
+
+    // ✅ SUCESSO - EXTRAIR CONTEÚDO SIMPLES
+    console.log('✅ CAPTCHA resolved, extracting content...');
     
-    const extractedData = await page.evaluate((instructions) => {
-      // Função para limpar texto
-      const cleanText = (text) => {
-        return text
-          .replace(/\s+/g, ' ')
-          .replace(/[^\w\s.,!?$€£¥@#%&*()\-+=:;'"<>/\\|{}\[\]~`]/g, '')
-          .trim();
-      };
-
-      // Analisar instruções para determinar o que extrair
-      const instructionsLower = instructions.toLowerCase();
-      
-      // DETECTAR TIPO DE CONTEÚDO BASEADO NAS INSTRUÇÕES
-      const isBookStore = instructionsLower.includes('book') || instructionsLower.includes('livro');
-      const isQuoteSite = instructionsLower.includes('quote') || instructionsLower.includes('citação');
-      const isEcommerce = instructionsLower.includes('product') || instructionsLower.includes('produto') || 
-                          instructionsLower.includes('shop') || instructionsLower.includes('loja');
-      const isCatalog = instructionsLower.includes('catalog') || instructionsLower.includes('catálogo');
-
-      // EXTRAIR INFORMAÇÕES ESPECÍFICAS
-      let extractedInfo = {
-        type: 'generic',
-        primaryData: [],
-        metadata: {},
-        relevantLinks: []
-      };
-
-      // REMOVER ELEMENTOS INDESEJADOS
-      const unwantedSelectors = [
-        'script', 'style', 'nav', 'header', 'footer', 'aside', 
-        'iframe', 'object', 'embed', 'canvas', 'svg',
-        '.ad', '.advertisement', '.banner', '.popup', '.modal',
-        'img', 'video', 'audio', 'source', 'track'
-      ];
-      
-      unwantedSelectors.forEach(selector => {
+    const text = await page.evaluate(() => {
+      // Limpar elementos indesejados
+      const unwanted = ['script', 'style', 'nav', 'header', 'footer', 'aside'];
+      unwanted.forEach(selector => {
         const elements = document.querySelectorAll(selector);
         elements.forEach(el => el.remove());
       });
+      return document.body.innerText;
+    });
 
-      // 📚 LÓGICA PARA SITES DE LIVROS
-      if (isBookStore) {
-        const bookElements = document.querySelectorAll('.product_pod, .book, .product, [class*="book"], [class*="product"]');
-        extractedInfo.type = 'bookstore';
-        
-        bookElements.forEach((book, index) => {
-          const title = book.querySelector('h3, h2, h1, .title, [class*="title"]')?.innerText || '';
-          const price = book.querySelector('.price, .price_color, [class*="price"]')?.innerText || '';
-          const availability = book.querySelector('.availability, .instock, [class*="avail"]')?.innerText || '';
-          const rating = book.querySelector('.star-rating, .rating, [class*="star"]')?.className || '';
-          
-          if (title || price) {
-            extractedInfo.primaryData.push({
-              type: 'book',
-              title: cleanText(title),
-              price: cleanText(price),
-              availability: cleanText(availability),
-              rating: cleanText(rating),
-              position: index + 1
-            });
-          }
-        });
-      }
-
-      // 💬 LÓGICA PARA SITES DE CITAÇÕES
-      if (isQuoteSite) {
-        const quoteElements = document.querySelectorAll('.quote, .citation, [class*="quote"], blockquote');
-        extractedInfo.type = 'quotes';
-        
-        quoteElements.forEach((quote, index) => {
-          const text = quote.querySelector('.text, .content, span, div')?.innerText || quote.innerText;
-          const author = quote.querySelector('.author, .cite, small, .author-name')?.innerText || '';
-          const tags = Array.from(quote.querySelectorAll('.tag, .keyword, .label')).map(tag => cleanText(tag.innerText));
-          
-          if (text) {
-            extractedInfo.primaryData.push({
-              type: 'quote',
-              text: cleanText(text),
-              author: cleanText(author),
-              tags: tags,
-              position: index + 1
-            });
-          }
-        });
-      }
-
-      // 🛒 LÓGICA PARA E-COMMERCE
-      if (isEcommerce) {
-        const productElements = document.querySelectorAll('.product, .item, .goods, [class*="product"], [class*="item"]');
-        extractedInfo.type = 'ecommerce';
-        
-        productElements.forEach((product, index) => {
-          const name = product.querySelector('.product-title, .name, .title, h1, h2, h3')?.innerText || '';
-          const price = product.querySelector('.price, .cost, .amount, [class*="price"]')?.innerText || '';
-          const description = product.querySelector('.description, .desc, .excerpt')?.innerText || '';
-          const category = product.querySelector('.category, .type, .group')?.innerText || '';
-          
-          if (name || price) {
-            extractedInfo.primaryData.push({
-              type: 'product',
-              name: cleanText(name),
-              price: cleanText(price),
-              description: cleanText(description),
-              category: cleanText(category),
-              position: index + 1
-            });
-          }
-        });
-      }
-
-      // 🔍 FALLBACK - EXTRAÇÃO GENÉRICA SE NADA ESPECÍFICO FOR ENCONTRADO
-      if (extractedInfo.primaryData.length === 0) {
-        console.log('🔍 Usando extração genérica...');
-        
-        // Extrair textos estruturados
-        const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6'))
-          .map(h => ({ type: 'heading', level: h.tagName, text: cleanText(h.innerText) }))
-          .filter(h => h.text.length > 3);
-
-        const paragraphs = Array.from(document.querySelectorAll('p, li, td, span, div'))
-          .map(el => cleanText(el.innerText))
-          .filter(text => text.length > 10 && text.length < 500)
-          .slice(0, 20);
-
-        const prices = Array.from(document.querySelectorAll('*'))
-          .map(el => el.innerText)
-          .filter(text => /\$|\€|\£|\¥|\d+[,.]\d{2}/.test(text))
-          .map(text => cleanText(text))
-          .slice(0, 10);
-
-        extractedInfo.primaryData = [
-          ...headings,
-          ...paragraphs.map(text => ({ type: 'text', text })),
-          ...prices.map(text => ({ type: 'price', text }))
-        ];
-      }
-
-      // 🔗 EXTRAIR LINKS RELEVANTES
+    const links = await page.evaluate(() => {
+      const origin = window.location.origin;
       const allLinks = Array.from(document.querySelectorAll('a[href]'));
-      extractedInfo.relevantLinks = allLinks
+      return allLinks
         .map(a => {
           try {
             const href = a.href;
-            const text = cleanText(a.innerText);
-            
-            // Filtrar apenas links relevantes
-            const isRelevant = 
-              text.length > 2 && 
-              text.length < 100 &&
-              !text.toLowerCase().includes('cookie') &&
-              !text.toLowerCase().includes('privacy') &&
-              !text.toLowerCase().includes('terms') &&
-              !href.includes('.jpg') &&
-              !href.includes('.png') &&
-              !href.includes('.pdf') &&
-              !href.includes('.zip');
-
-            if (isRelevant && href.startsWith('http')) {
-              return {
-                url: href,
-                text: text,
-                type: this.determineLinkType(text, href)
-              };
+            // Resolver URLs relativas
+            if (href.startsWith('/')) {
+              return origin + href;
             }
+            if (href.startsWith('./')) {
+              return origin + href.slice(1);
+            }
+            return href;
           } catch (e) {
             return null;
           }
         })
-        .filter(link => link !== null)
-        .slice(0, 15);
-
-      // 📊 METADADOS
-      extractedInfo.metadata = {
-        title: document.title,
-        url: window.location.href,
-        itemsFound: extractedInfo.primaryData.length,
-        linksFound: extractedInfo.relevantLinks.length,
-        extractionType: extractedInfo.type,
-        timestamp: new Date().toISOString()
-      };
-
-      return extractedInfo;
-
-    }, instructions);
+        .filter(href => href && href.startsWith(origin))
+        .slice(0, 10);
+    });
 
     await browser.close();
     
     res.json({ 
+      captcha: false, 
+      text, 
+      links,
+      instructions: instructions, // ✅ INCLUDE INSTRUCTIONS IN RESPONSE
+      captchaSolutionUsed: !!captchaSolution,
       success: true,
-      captcha: false,
-      extractedData: extractedData,
-      instructionsUsed: instructions,
-      summary: {
-        itemsExtracted: extractedData.primaryData.length,
-        relevantLinks: extractedData.relevantLinks.length,
-        dataType: extractedData.type
-      }
+      contentLength: text.length,
+      linksFound: links.length
     });
     
   } catch (err) {
-    console.error('❌ Error in targeted scraper:', err.message);
+    console.error('❌ Error in scraper:', err.message);
     if (browser) await browser.close();
     res.status(500).json({ 
       error: err.message,
+      captcha: false,
       success: false
     });
   }
 });
 
-// ✅ ENDPOINT DE SCRAPING EM LOTE ATUALIZADO
+// ✅ ENDPOINT DE SCRAPING EM LOTE
 app.post('/scrape-batch', async (req, res) => {
   console.log('📦 Recebendo requisição de scraping em lote...');
   
@@ -319,11 +267,18 @@ app.post('/scrape-batch', async (req, res) => {
         
         const page = await browser.newPage();
         
-        // Bloquear recursos desnecessários
+        // ✅ BLOQUEAR RECURSOS DESNECESSÁRIOS NO LOTE TAMBÉM
         await page.setRequestInterception(true);
         page.on('request', (request) => {
           const resourceType = request.resourceType();
-          if (['image', 'font', 'media', 'stylesheet'].includes(resourceType)) {
+          const requestUrl = request.url().toLowerCase();
+          const blockedTypes = ['image', 'media', 'font', 'stylesheet'];
+          const blockedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.avi', '.mov', '.pdf', '.zip', '.rar'];
+          
+          const isBlocked = blockedTypes.includes(resourceType) || 
+                           blockedExtensions.some(ext => requestUrl.includes(ext));
+          
+          if (isBlocked) {
             request.abort();
           } else {
             request.continue();
@@ -345,6 +300,7 @@ app.post('/scrape-batch', async (req, res) => {
         });
 
         if (hasCaptcha) {
+          console.log(`🛡️ CAPTCHA detectado em ${url}, pulando...`);
           results.push({
             success: false,
             url: url,
@@ -355,39 +311,47 @@ app.post('/scrape-batch', async (req, res) => {
           continue;
         }
 
-        // Extrair dados específicos usando a mesma lógica do endpoint individual
-        const extractedData = await page.evaluate((instructions) => {
-          // (Aqui viria a mesma lógica de extração do endpoint individual)
-          // Por questão de espaço, estou simplificando
-          const cleanText = (text) => text.replace(/\s+/g, ' ').trim();
-          
-          // Remover elementos indesejados
-          ['script', 'style', 'nav', 'header', 'footer', 'aside', 'img', 'video'].forEach(selector => {
-            document.querySelectorAll(selector).forEach(el => el.remove());
+        // Extrair conteúdo simples
+        const text = await page.evaluate(() => {
+          const unwanted = ['script', 'style', 'nav', 'header', 'footer', 'aside'];
+          unwanted.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => el.remove());
           });
+          return document.body.innerText;
+        });
 
-          const relevantText = Array.from(document.querySelectorAll('h1, h2, h3, p, li, td, span, div'))
-            .map(el => cleanText(el.innerText))
-            .filter(text => text.length > 5 && text.length < 300)
-            .slice(0, 15);
-
-          return {
-            extractedContent: relevantText,
-            contentLength: relevantText.join(' ').length,
-            itemsFound: relevantText.length
-          };
-        }, instructions);
+        const links = await page.evaluate(() => {
+          const origin = window.location.origin;
+          const allLinks = Array.from(document.querySelectorAll('a[href]'));
+          return allLinks
+            .map(a => {
+              try {
+                const href = a.href;
+                if (href.startsWith('/')) return origin + href;
+                if (href.startsWith('./')) return origin + href.slice(1);
+                return href;
+              } catch (e) {
+                return null;
+              }
+            })
+            .filter(href => href && href.startsWith('http'))
+            .slice(0, 5);
+        });
 
         await page.close();
 
         results.push({
           success: true,
           url: url,
-          extractedData: extractedData,
-          instructions: instructions
+          mainContent: text,
+          contentLength: text.length,
+          links: links,
+          linksFound: links.length,
+          instructions: instructions // ✅ INCLUDE INSTRUCTIONS IN RESPONSE
         });
 
-        console.log(`✅ URL ${i + 1} processada - ${extractedData.itemsFound} itens extraídos`);
+        console.log(`✅ URL ${i + 1} processada com sucesso`);
 
       } catch (error) {
         console.log(`❌ Erro processando URL ${i + 1}:`, error.message);
@@ -406,17 +370,23 @@ app.post('/scrape-batch', async (req, res) => {
 
     await browser.close();
 
-    // Combinar resultados bem-sucedidos
     const successfulScrapes = results.filter(r => r.success);
-    
+    const combinedContent = successfulScrapes
+      .map(result => `--- URL: ${result.url} ---\n${result.mainContent}`)
+      .join('\n\n');
+
+    console.log(`✅ Lote finalizado: ${successfulScrapes.length}/${urlsToProcess.length} sucessos`);
+
     res.json({
       success: true,
-      method: 'targeted-batch',
+      method: 'puppeteer-batch',
       urlsProcessed: urlsToProcess.length,
       successfulScrapes: successfulScrapes.length,
       failedScrapes: results.length - successfulScrapes.length,
+      combinedContent: combinedContent,
+      totalContentLength: combinedContent.length,
       individualResults: results,
-      instructions: instructions,
+      instructions: instructions, // ✅ INCLUDE INSTRUCTIONS IN RESPONSE
       timestamp: new Date().toISOString()
     });
 
@@ -426,14 +396,17 @@ app.post('/scrape-batch', async (req, res) => {
     
     res.status(500).json({
       success: false,
-      error: 'Erro no scraping em lote: ' + error.message
+      error: 'Erro no scraping em lote: ' + error.message,
+      method: 'puppeteer-batch'
     });
   }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ Targeted Scraper running on port ${PORT}`);
-  console.log(`🎯 Extrai apenas informações específicas baseadas nas instruções`);
+  console.log(`✅ Puppeteer scraper running on port ${PORT}`);
+  console.log(`🔑 Anti-Captcha Key: 3582d06717ccd04bf3290f5c1799bc70`);
+  console.log(`📦 Endpoints disponíveis: /scrape e /scrape-batch`);
   console.log(`🚫 Bloqueia: imagens, vídeos, CSS, fonts e arquivos baixáveis`);
+  console.log(`📝 Segue instruções da planilha`);
 });
