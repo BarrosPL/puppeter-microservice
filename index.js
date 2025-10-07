@@ -1,20 +1,35 @@
 import express from 'express';
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
+app.get('/', (req, res) => {
+  res.send('Puppeteer scraper is running 🚀');
+});
+
 app.post('/scrape', async (req, res) => {
   const { url } = req.body;
-  const browser = await puppeteer.launch({ args: ['--no-sandbox'] });
-  const page = await browser.newPage();
+  if (!url) return res.status(400).json({ error: 'Missing URL' });
 
+  let browser;
   try {
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 });
+    const executablePath = await chromium.executablePath();
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      executablePath,
+      headless: chromium.headless,
+    });
 
-    const hasCaptcha = await page.evaluate(() =>
-      document.body.innerText.toLowerCase().includes('captcha')
-    );
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+    // Detecta CAPTCHA simples
+    const hasCaptcha = await page.evaluate(() => {
+      const text = document.body.innerText.toLowerCase();
+      return text.includes('captcha') || !!document.querySelector('iframe[src*="captcha"]');
+    });
 
     if (hasCaptcha) {
       const screenshot = await page.screenshot({ encoding: 'base64' });
@@ -22,20 +37,25 @@ app.post('/scrape', async (req, res) => {
       return res.json({ captcha: true, screenshot });
     }
 
+    // Extrai texto principal
     const text = await page.evaluate(() => document.body.innerText);
-    const links = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('a[href]'))
+
+    // Extrai até 10 links internos
+    const links = await page.evaluate(() => {
+      const origin = location.origin;
+      return Array.from(document.querySelectorAll('a[href]'))
         .map(a => a.href)
-        .filter(h => h.startsWith(location.origin))
-        .slice(0, 10)
-    );
+        .filter(h => h.startsWith(origin))
+        .slice(0, 10);
+    });
 
     await browser.close();
     res.json({ captcha: false, text, links });
   } catch (err) {
-    await browser.close();
+    if (browser) await browser.close();
     res.status(500).json({ error: err.message });
   }
 });
 
-app.listen(3000, () => console.log('Scraper ativo na porta 3000'));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`✅ Scraper running on port ${PORT}`));
