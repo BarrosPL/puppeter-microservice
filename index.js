@@ -5,8 +5,12 @@ import chromium from '@sparticuz/chromium';
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
+app.get('/', (req, res) => {
+  res.send('Puppeteer scraper with Anti-Captcha integration 🚀');
+});
+
 app.post('/scrape', async (req, res) => {
-  const { url, captchaSolution, captchaType } = req.body;
+  const { url, captchaSolution } = req.body;
   if (!url) return res.status(400).json({ error: 'Missing URL' });
 
   let browser;
@@ -19,127 +23,269 @@ app.post('/scrape', async (req, res) => {
     });
 
     const page = await browser.newPage();
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    
+    // Configurar user agent para parecer mais legítimo
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    await page.goto(url, { 
+      waitUntil: 'domcontentloaded', 
+      timeout: 30000 
+    });
 
-    // ✅ SE é reCAPTCHA, usar método específico
-    if (captchaSolution && captchaType === 'recaptcha') {
-      console.log('🔄 Aplicando token reCAPTCHA:', captchaSolution.substring(0, 50) + '...');
+    // ✅ DETECÇÃO AVANÇADA DE CAPTCHA
+    const captchaInfo = await page.evaluate(() => {
+      // Elementos visuais de CAPTCHA
+      const captchaImage = document.querySelector('img[src*="captcha"], img[alt*="captcha"], img[src*="CAPTCHA"]');
+      const captchaInput = document.querySelector('input[name*="captcha"], input[id*="captcha"], input[name*="Captcha"]');
       
-      const recaptchaSuccess = await page.evaluate((token) => {
-        try {
-          // Método 1: Encontrar o textarea do reCAPTCHA
-          const recaptchaResponse = document.querySelector('textarea#g-recaptcha-response');
-          if (recaptchaResponse) {
-            recaptchaResponse.value = token;
-            recaptchaResponse.style.display = 'block'; // Tornar visível se necessário
-            recaptchaResponse.dispatchEvent(new Event('input', { bubbles: true }));
-            recaptchaResponse.dispatchEvent(new Event('change', { bubbles: true }));
-            console.log('✅ reCAPTCHA token aplicado no textarea');
-            return true;
-          }
-          
-          // Método 2: Encontrar input hidden
-          const recaptchaHidden = document.querySelector('input[name="g-recaptcha-response"]');
-          if (recaptchaHidden) {
-            recaptchaHidden.value = token;
-            recaptchaHidden.dispatchEvent(new Event('input', { bubbles: true }));
-            console.log('✅ reCAPTCHA token aplicado no input hidden');
-            return true;
-          }
-          
-          // Método 3: Executar callback do reCAPTCHA
-          if (window.grecaptcha) {
-            console.log('🔄 grecaptcha encontrado, executando callback...');
-            // Tentar encontrar o widget ID
-            const widgets = document.querySelectorAll('.g-recaptcha');
-            for (const widget of widgets) {
-              const widgetId = widget.getAttribute('data-sitekey');
-              if (widgetId) {
-                try {
-                  window.grecaptcha.execute(widgetId, { action: 'submit' })
-                    .then((recaptchaToken) => {
-                      console.log('✅ reCAPTCHA executado via grecaptcha.execute');
-                    });
-                  return true;
-                } catch (e) {
-                  console.log('❌ Erro no grecaptcha.execute:', e);
-                }
+      // Textos indicativos
+      const bodyText = document.body.innerText.toLowerCase();
+      const hasCaptchaText = bodyText.includes('captcha');
+      const hasSecurityCode = bodyText.includes('security code');
+      const hasVerification = bodyText.includes('verification code');
+      const hasEnterText = bodyText.includes('enter the text');
+      const hasRobot = bodyText.includes('robot');
+      
+      // reCAPTCHA (vamos evitar)
+      const hasRecaptcha = !!document.querySelector('.g-recaptcha, iframe[src*="recaptcha"]');
+      
+      return {
+        hasCaptcha: !!(captchaImage || captchaInput || hasCaptchaText || hasSecurityCode || hasVerification || hasEnterText),
+        hasRecaptcha: hasRecaptcha,
+        captchaImage: !!captchaImage,
+        captchaInput: !!captchaInput,
+        captchaText: hasCaptchaText,
+        securityCode: hasSecurityCode,
+        verificationCode: hasVerification,
+        enterText: hasEnterText,
+        robotText: hasRobot
+      };
+    });
+
+    console.log('🔍 CAPTCHA Analysis:', captchaInfo);
+
+    // ✅ SE TEM CAPTCHA COMPLEXO (reCAPTCHA), EVITAR
+    if (captchaInfo.hasRecaptcha) {
+      await browser.close();
+      return res.json({ 
+        captcha: true,
+        captchaType: 'recaptcha',
+        error: "reCAPTCHA detected - too complex for automatic solving",
+        skip: true
+      });
+    }
+
+    // ✅ SE TEM CAPTCHA SIMPLES
+    if (captchaInfo.hasCaptcha) {
+      console.log('🛡️ Simple CAPTCHA detected');
+      
+      // SE TEM SOLUÇÃO, TENTAR APLICAR
+      if (captchaSolution) {
+        console.log('🔄 Applying CAPTCHA solution:', captchaSolution);
+        
+        const solutionResult = await page.evaluate((solution) => {
+          try {
+            // Estratégia 1: Campos específicos de CAPTCHA
+            const specificSelectors = [
+              'input[name="captcha"]',
+              'input[name="captcha_code"]',
+              'input[name="captcha_text"]',
+              'input[name="security_code"]',
+              'input[name="verification_code"]',
+              'input#captcha',
+              'input#captcha_code',
+              'textarea[name="captcha"]'
+            ];
+            
+            for (const selector of specificSelectors) {
+              const input = document.querySelector(selector);
+              if (input) {
+                input.value = solution;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                console.log('✅ Solution applied to specific field:', selector);
+                return { success: true, method: 'specific', field: selector };
               }
             }
-          }
-          
-          console.log('❌ Nenhum método reCAPTCHA funcionou');
-          return false;
-        } catch (error) {
-          console.log('❌ Erro no reCAPTCHA:', error);
-          return false;
-        }
-      }, captchaSolution);
-
-      if (recaptchaSuccess) {
-        // Aguardar um pouco e tentar submeter
-        await page.waitForTimeout(2000);
-        
-        // Tentar submeter automaticamente
-        const submitted = await page.evaluate(() => {
-          const submitButtons = [
-            'input[type="submit"]',
-            'button[type="submit"]',
-            'button:contains("Submit")',
-            'button:contains("Verify")',
-            'form button',
-            '#recaptcha-submit',
-            '.g-recaptcha ~ button'
-          ];
-          
-          for (const selector of submitButtons) {
-            try {
-              const element = document.querySelector(selector);
-              if (element) {
-                element.click();
-                console.log('✅ Botão clicado:', selector);
-                return true;
+            
+            // Estratégia 2: Campos genéricos com contexto
+            const allTextInputs = document.querySelectorAll('input[type="text"], textarea');
+            for (const input of allTextInputs) {
+              // Verificar contexto do campo
+              const parent = input.closest('div, form, p, td');
+              const parentText = parent ? parent.textContent.toLowerCase() : '';
+              const placeholder = input.placeholder?.toLowerCase() || '';
+              const name = input.name?.toLowerCase() || '';
+              const id = input.id?.toLowerCase() || '';
+              
+              const isCaptchaField = 
+                parentText.includes('captcha') ||
+                parentText.includes('security code') ||
+                parentText.includes('verification') ||
+                parentText.includes('enter text') ||
+                placeholder.includes('captcha') ||
+                placeholder.includes('code') ||
+                name.includes('captcha') ||
+                name.includes('code') ||
+                id.includes('captcha') ||
+                id.includes('code');
+              
+              if (isCaptchaField) {
+                input.value = solution;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                console.log('✅ Solution applied to contextual field:', name || placeholder || id);
+                return { success: true, method: 'contextual', field: name || placeholder || id };
               }
-            } catch (e) {}
+            }
+            
+            // Estratégia 3: Primeiro campo de texto visível
+            const visibleInputs = Array.from(document.querySelectorAll('input[type="text"], textarea'))
+              .filter(input => {
+                const style = window.getComputedStyle(input);
+                return style.display !== 'none' && style.visibility !== 'hidden';
+              });
+              
+            if (visibleInputs.length > 0) {
+              visibleInputs[0].value = solution;
+              visibleInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+              console.log('✅ Solution applied to first visible field');
+              return { success: true, method: 'fallback', field: 'first_visible' };
+            }
+            
+            return { success: false, error: 'No suitable field found' };
+            
+          } catch (error) {
+            return { success: false, error: error.message };
           }
-          return false;
-        });
+        }, captchaSolution);
 
-        if (submitted) {
-          await page.waitForTimeout(5000);
+        console.log('🔧 Solution application result:', solutionResult);
+
+        if (solutionResult.success) {
+          // Tentar submeter o formulário
+          const submitted = await page.evaluate(() => {
+            const submitSelectors = [
+              'input[type="submit"]',
+              'button[type="submit"]',
+              'button:contains("Submit")',
+              'button:contains("Verify")',
+              'button:contains("Continue")',
+              'form input[type="submit"]',
+              'form button[type="submit"]'
+            ];
+            
+            for (const selector of submitSelectors) {
+              try {
+                const element = document.querySelector(selector);
+                if (element && element.offsetParent !== null) { // Está visível
+                  element.click();
+                  console.log('✅ Form submitted via:', selector);
+                  return true;
+                }
+              } catch (e) {
+                console.log('⚠️ Error clicking:', selector, e);
+              }
+            }
+            
+            // Fallback: pressionar Enter
+            console.log('🔄 Trying Enter key as fallback');
+            return false;
+          });
+
+          if (!submitted) {
+            // Se não encontrou botão, pressionar Enter
+            await page.keyboard.press('Enter');
+          }
+
+          // Aguardar processamento
+          await page.waitForTimeout(4000);
+          
+          // Tentar navegação
           try {
-            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 });
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 });
+            console.log('✅ Navigation detected after CAPTCHA submission');
           } catch (e) {
-            console.log('⚠️ Navegação não detectada, continuando...');
+            console.log('⚠️ No navigation detected, continuing...');
           }
         }
+      } else {
+        // SE NÃO TEM SOLUÇÃO, RETORNAR SCREENSHOT
+        console.log('📸 Taking CAPTCHA screenshot for solving');
+        const screenshot = await page.screenshot({ 
+          encoding: 'base64',
+          fullPage: false // Apenas a área visível
+        });
+        await browser.close();
+        return res.json({ 
+          captcha: true, 
+          screenshot,
+          captchaType: 'simple',
+          captchaInfo: captchaInfo,
+          message: 'Simple CAPTCHA detected - ready for solving'
+        });
       }
     }
 
-    // Verificar se CAPTCHA ainda existe
-    const hasCaptcha = await page.evaluate(() => {
-      return !!document.querySelector('.g-recaptcha, iframe[src*="recaptcha"]') ||
-             document.body.innerText.toLowerCase().includes('captcha');
+    // ✅ VERIFICAR SE CAPTCHA AINDA EXISTE APÓS TENTATIVA
+    const stillHasCaptcha = await page.evaluate(() => {
+      const currentText = document.body.innerText.toLowerCase();
+      const hasError = currentText.includes('invalid') || 
+                      currentText.includes('incorrect') || 
+                      currentText.includes('wrong') ||
+                      currentText.includes('error');
+      
+      const stillHasCaptchaElement = !!document.querySelector('img[src*="captcha"]') ||
+                                    currentText.includes('captcha');
+      
+      return hasError || stillHasCaptchaElement;
     });
 
-    if (hasCaptcha) {
-      console.log('❌ reCAPTCHA ainda presente');
+    if (stillHasCaptcha) {
+      console.log('❌ CAPTCHA still present or incorrect solution');
       const screenshot = await page.screenshot({ encoding: 'base64' });
       await browser.close();
       return res.json({ 
         captcha: true, 
         screenshot,
-        message: 'reCAPTCHA still present after token application'
+        captchaType: 'simple',
+        captchaSolutionUsed: !!captchaSolution,
+        message: 'CAPTCHA still present after solution attempt'
       });
     }
 
-    // Extrair conteúdo se sucesso
-    const text = await page.evaluate(() => document.body.innerText);
+    // ✅ SUCESSO - EXTRAIR CONTEÚDO
+    console.log('✅ CAPTCHA resolved, extracting content...');
+    
+    const text = await page.evaluate(() => {
+      // Limpar elementos indesejados
+      const unwanted = ['script', 'style', 'nav', 'header', 'footer', 'aside'];
+      unwanted.forEach(selector => {
+        const elements = document.querySelectorAll(selector);
+        elements.forEach(el => el.remove());
+      });
+      return document.body.innerText;
+    });
+
     const links = await page.evaluate(() => {
-      const origin = location.origin;
-      return Array.from(document.querySelectorAll('a[href]'))
-        .map(a => a.href)
-        .filter(h => h.startsWith(origin))
+      const origin = window.location.origin;
+      const allLinks = Array.from(document.querySelectorAll('a[href]'));
+      return allLinks
+        .map(a => {
+          try {
+            const href = a.href;
+            // Resolver URLs relativas
+            if (href.startsWith('/')) {
+              return origin + href;
+            }
+            if (href.startsWith('./')) {
+              return origin + href.slice(1);
+            }
+            return href;
+          } catch (e) {
+            return null;
+          }
+        })
+        .filter(href => href && href.startsWith(origin))
         .slice(0, 10);
     });
 
@@ -149,14 +295,25 @@ app.post('/scrape', async (req, res) => {
       captcha: false, 
       text, 
       links,
-      success: true
+      captchaSolutionUsed: !!captchaSolution,
+      success: true,
+      contentLength: text.length,
+      linksFound: links.length
     });
     
   } catch (err) {
+    console.error('❌ Error in scraper:', err.message);
     if (browser) await browser.close();
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ 
+      error: err.message,
+      captcha: false,
+      success: false
+    });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ reCAPTCHA-aware scraper running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`✅ Puppeteer scraper with Anti-Captcha running on port ${PORT}`);
+  console.log(`🔑 Anti-Captcha Key: 3582d06717ccd04bf3290f5c1799bc70`);
+});
