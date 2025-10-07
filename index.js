@@ -16,11 +16,24 @@ app.post('/scrape', async (req, res) => {
   let browser;
   try {
     const executablePath = await chromium.executablePath();
-    browser = await puppeteer.launch({
-      args: chromium.args,
+    
+    // ✅ CONFIGURAÇÃO ROBUSTA PARA EVITAR ETXTBSY
+    const browserConfig = {
+      args: [
+        ...chromium.args,
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--single-process'
+      ],
       executablePath,
-      headless: chromium.headless,
-    });
+      headless: true, // Forçar headless
+      ignoreHTTPSErrors: true
+    };
+
+    console.log('🚀 Iniciando browser com configuração robusta...');
+    browser = await puppeteer.launch(browserConfig);
 
     const page = await browser.newPage();
     
@@ -47,12 +60,13 @@ app.post('/scrape', async (req, res) => {
     // Configurar user agent para parecer mais legítimo
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
+    console.log(`🌐 Navegando para: ${url}`);
     await page.goto(url, { 
-      waitUntil: 'domcontentloaded', 
-      timeout: 30000 
+      waitUntil: 'networkidle2', // ✅ Mudar para networkidle2
+      timeout: 15000 // ✅ Reduzir timeout
     });
 
-    // ✅ DETECÇÃO AVANÇADA DE CAPTCHA
+    // ✅ DETECÇÃO SIMPLIFICADA DE CAPTCHA
     const captchaInfo = await page.evaluate(() => {
       const captchaImage = document.querySelector('img[src*="captcha"], img[alt*="captcha"], img[src*="CAPTCHA"]');
       const captchaInput = document.querySelector('input[name*="captcha"], input[id*="captcha"], input[name*="Captcha"]');
@@ -80,95 +94,15 @@ app.post('/scrape', async (req, res) => {
       });
     }
 
-    // ✅ SE TEM CAPTCHA SIMPLES
+    // ✅ SE TEM CAPTCHA SIMPLES - RETORNAR RAPIDAMENTE
     if (captchaInfo.hasCaptcha) {
-      console.log('🛡️ Simple CAPTCHA detected');
-      
-      if (captchaSolution) {
-        console.log('🔄 Applying CAPTCHA solution:', captchaSolution);
-        
-        const solutionResult = await page.evaluate((solution) => {
-          try {
-            const specificSelectors = [
-              'input[name="captcha"]',
-              'input[name="captcha_code"]',
-              'input[name="captcha_text"]',
-              'input[name="security_code"]',
-              'input[name="verification_code"]',
-              'input#captcha',
-              'input#captcha_code',
-              'textarea[name="captcha"]'
-            ];
-            
-            for (const selector of specificSelectors) {
-              const input = document.querySelector(selector);
-              if (input) {
-                input.value = solution;
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
-                return { success: true, method: 'specific', field: selector };
-              }
-            }
-            
-            return { success: false, error: 'No suitable field found' };
-            
-          } catch (error) {
-            return { success: false, error: error.message };
-          }
-        }, captchaSolution);
-
-        console.log('🔧 Solution application result:', solutionResult);
-
-        if (solutionResult.success) {
-          await page.waitForTimeout(4000);
-          try {
-            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 });
-            console.log('✅ Navigation detected after CAPTCHA submission');
-          } catch (e) {
-            console.log('⚠️ No navigation detected, continuing...');
-          }
-        }
-      } else {
-        console.log('📸 Taking CAPTCHA screenshot for solving');
-        const screenshot = await page.screenshot({ 
-          encoding: 'base64',
-          fullPage: false
-        });
-        await browser.close();
-        return res.json({ 
-          captcha: true, 
-          screenshot,
-          captchaType: 'simple',
-          captchaInfo: captchaInfo,
-          message: 'Simple CAPTCHA detected - ready for solving'
-        });
-      }
-    }
-
-    // ✅ VERIFICAR SE CAPTCHA AINDA EXISTE APÓS TENTATIVA
-    const stillHasCaptcha = await page.evaluate(() => {
-      const currentText = document.body.innerText.toLowerCase();
-      const hasError = currentText.includes('invalid') || 
-                      currentText.includes('incorrect') || 
-                      currentText.includes('wrong') ||
-                      currentText.includes('error');
-      
-      const stillHasCaptchaElement = !!document.querySelector('img[src*="captcha"]') ||
-                                    currentText.includes('captcha');
-      
-      return hasError || stillHasCaptchaElement;
-    });
-
-    if (stillHasCaptcha) {
-      console.log('❌ CAPTCHA still present or incorrect solution');
-      const screenshot = await page.screenshot({ encoding: 'base64' });
+      console.log('🛡️ CAPTCHA detected, returning early...');
       await browser.close();
       return res.json({ 
-        captcha: true, 
-        screenshot,
+        captcha: true,
         captchaType: 'simple',
-        captchaSolutionUsed: !!captchaSolution,
-        message: 'CAPTCHA still present after solution attempt'
+        message: 'CAPTCHA detected - requires manual solution',
+        instructions: instructions
       });
     }
 
@@ -214,8 +148,7 @@ app.post('/scrape', async (req, res) => {
       captcha: false, 
       text, 
       links,
-      instructions: instructions, // ✅ INCLUDE INSTRUCTIONS IN RESPONSE
-      captchaSolutionUsed: !!captchaSolution,
+      instructions: instructions,
       success: true,
       contentLength: text.length,
       linksFound: links.length
@@ -224,15 +157,18 @@ app.post('/scrape', async (req, res) => {
   } catch (err) {
     console.error('❌ Error in scraper:', err.message);
     if (browser) await browser.close();
+    
+    // ✅ RESPOSTA DE ERRO MAIS INFORMATIVA
     res.status(500).json({ 
-      error: err.message,
-      captcha: false,
-      success: false
+      success: false,
+      error: `Scraping failed: ${err.message}`,
+      instructions: instructions,
+      url: url
     });
   }
 });
 
-// ✅ ENDPOINT DE SCRAPING EM LOTE
+// ✅ ENDPOINT DE SCRAPING EM LOTE ATUALIZADO
 app.post('/scrape-batch', async (req, res) => {
   console.log('📦 Recebendo requisição de scraping em lote...');
   
@@ -250,14 +186,26 @@ app.post('/scrape-batch', async (req, res) => {
   let browser;
   try {
     const executablePath = await chromium.executablePath();
-    browser = await puppeteer.launch({
-      args: chromium.args,
+    
+    // ✅ CONFIGURAÇÃO ROBUSTA PARA O LOTE TAMBÉM
+    const browserConfig = {
+      args: [
+        ...chromium.args,
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--single-process'
+      ],
       executablePath,
-      headless: chromium.headless,
-    });
+      headless: true,
+      ignoreHTTPSErrors: true
+    };
+
+    browser = await puppeteer.launch(browserConfig);
 
     const results = [];
-    const urlsToProcess = urls.slice(0, 5);
+    const urlsToProcess = urls.slice(0, 3); // ✅ Reduzir para 3 URLs
 
     for (let i = 0; i < urlsToProcess.length; i++) {
       const url = urlsToProcess[i];
@@ -267,7 +215,7 @@ app.post('/scrape-batch', async (req, res) => {
         
         const page = await browser.newPage();
         
-        // ✅ BLOQUEAR RECURSOS DESNECESSÁRIOS NO LOTE TAMBÉM
+        // ✅ BLOQUEAR RECURSOS DESNECESSÁRIOS NO LOTE
         await page.setRequestInterception(true);
         page.on('request', (request) => {
           const resourceType = request.resourceType();
@@ -288,8 +236,8 @@ app.post('/scrape-batch', async (req, res) => {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         
         await page.goto(url, { 
-          waitUntil: 'domcontentloaded', 
-          timeout: 20000 
+          waitUntil: 'networkidle2', // ✅ Mudar para networkidle2
+          timeout: 10000 // ✅ Reduzir timeout
         });
 
         // Verificação rápida de CAPTCHA
@@ -305,7 +253,8 @@ app.post('/scrape-batch', async (req, res) => {
             success: false,
             url: url,
             error: 'CAPTCHA detected',
-            skipped: true
+            skipped: true,
+            instructions: instructions
           });
           await page.close();
           continue;
@@ -348,7 +297,7 @@ app.post('/scrape-batch', async (req, res) => {
           contentLength: text.length,
           links: links,
           linksFound: links.length,
-          instructions: instructions // ✅ INCLUDE INSTRUCTIONS IN RESPONSE
+          instructions: instructions
         });
 
         console.log(`✅ URL ${i + 1} processada com sucesso`);
@@ -358,13 +307,14 @@ app.post('/scrape-batch', async (req, res) => {
         results.push({
           success: false,
           url: url,
-          error: error.message
+          error: error.message,
+          instructions: instructions
         });
       }
 
       // Pequena pausa entre requests
       if (i < urlsToProcess.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 2000)); // ✅ Aumentar pausa
       }
     }
 
@@ -386,7 +336,7 @@ app.post('/scrape-batch', async (req, res) => {
       combinedContent: combinedContent,
       totalContentLength: combinedContent.length,
       individualResults: results,
-      instructions: instructions, // ✅ INCLUDE INSTRUCTIONS IN RESPONSE
+      instructions: instructions,
       timestamp: new Date().toISOString()
     });
 
@@ -397,7 +347,8 @@ app.post('/scrape-batch', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Erro no scraping em lote: ' + error.message,
-      method: 'puppeteer-batch'
+      method: 'puppeteer-batch',
+      instructions: instructions
     });
   }
 });
@@ -405,8 +356,7 @@ app.post('/scrape-batch', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Puppeteer scraper running on port ${PORT}`);
-  console.log(`🔑 Anti-Captcha Key: 3582d06717ccd04bf3290f5c1799bc70`);
-  console.log(`📦 Endpoints disponíveis: /scrape e /scrape-batch`);
   console.log(`🚫 Bloqueia: imagens, vídeos, CSS, fonts e arquivos baixáveis`);
   console.log(`📝 Segue instruções da planilha`);
+  console.log(`🔧 Configuração robusta para evitar ETXTBSY`);
 });
