@@ -312,8 +312,162 @@ app.post('/scrape', async (req, res) => {
   }
 });
 
+// ✅ NOVO ENDPOINT: SCRAPING EM LOTE
+app.post('/scrape-batch', async (req, res) => {
+  console.log('📦 Recebendo requisição de scraping em lote...');
+  
+  const { urls, instructions } = req.body;
+  
+  // Validação
+  if (!urls || !Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Array de URLs é obrigatório' 
+    });
+  }
+
+  console.log(`🎯 Processando ${urls.length} URLs`);
+
+  let browser;
+  try {
+    const executablePath = await chromium.executablePath();
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      executablePath,
+      headless: chromium.headless,
+    });
+
+    const results = [];
+    // Limitar para não sobrecarregar - processar apenas 5 URLs para teste
+    const urlsToProcess = urls.slice(0, 5);
+
+    // Processar cada URL sequencialmente
+    for (let i = 0; i < urlsToProcess.length; i++) {
+      const url = urlsToProcess[i];
+      
+      try {
+        console.log(`🌐 [${i + 1}/${urlsToProcess.length}] Processando: ${url}`);
+        
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        
+        await page.goto(url, { 
+          waitUntil: 'domcontentloaded', 
+          timeout: 20000 
+        });
+
+        // Verificação rápida de CAPTCHA
+        const hasCaptcha = await page.evaluate(() => {
+          const bodyText = document.body.innerText.toLowerCase();
+          return bodyText.includes('captcha') || 
+                 !!document.querySelector('.g-recaptcha, iframe[src*="recaptcha"]');
+        });
+
+        if (hasCaptcha) {
+          console.log(`🛡️ CAPTCHA detectado em ${url}, pulando...`);
+          results.push({
+            success: false,
+            url: url,
+            error: 'CAPTCHA detected',
+            skipped: true
+          });
+          await page.close();
+          continue;
+        }
+
+        // Extrair conteúdo
+        const text = await page.evaluate(() => {
+          const unwanted = ['script', 'style', 'nav', 'header', 'footer', 'aside'];
+          unwanted.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => el.remove());
+          });
+          return document.body.innerText;
+        });
+
+        const links = await page.evaluate(() => {
+          const origin = window.location.origin;
+          const allLinks = Array.from(document.querySelectorAll('a[href]'));
+          return allLinks
+            .map(a => {
+              try {
+                const href = a.href;
+                if (href.startsWith('/')) return origin + href;
+                if (href.startsWith('./')) return origin + href.slice(1);
+                return href;
+              } catch (e) {
+                return null;
+              }
+            })
+            .filter(href => href && href.startsWith('http'))
+            .slice(0, 5);
+        });
+
+        await page.close();
+
+        results.push({
+          success: true,
+          url: url,
+          mainContent: text,
+          contentLength: text.length,
+          links: links,
+          linksFound: links.length
+        });
+
+        console.log(`✅ URL ${i + 1} processada com sucesso`);
+
+      } catch (error) {
+        console.log(`❌ Erro processando URL ${i + 1}:`, error.message);
+        results.push({
+          success: false,
+          url: url,
+          error: error.message
+        });
+      }
+
+      // Pequena pausa entre requests para evitar bloqueios
+      if (i < urlsToProcess.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    await browser.close();
+
+    // Combinar resultados
+    const successfulScrapes = results.filter(r => r.success);
+    const combinedContent = successfulScrapes
+      .map(result => `--- URL: ${result.url} ---\n${result.mainContent}`)
+      .join('\n\n');
+
+    console.log(`✅ Lote finalizado: ${successfulScrapes.length}/${urlsToProcess.length} sucessos`);
+
+    res.json({
+      success: true,
+      method: 'puppeteer-batch',
+      urlsProcessed: urlsToProcess.length,
+      successfulScrapes: successfulScrapes.length,
+      failedScrapes: results.length - successfulScrapes.length,
+      combinedContent: combinedContent,
+      totalContentLength: combinedContent.length,
+      individualResults: results,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Erro geral no scraping em lote:', error.message);
+    if (browser) await browser.close();
+    
+    res.status(500).json({
+      success: false,
+      error: 'Erro no scraping em lote: ' + error.message,
+      method: 'puppeteer-batch'
+    });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ Puppeteer scraper with Anti-Captcha running on port ${PORT}`);
+  console.log(`✅ Puppeteer scraper with Batch support running on port ${PORT}`);
   console.log(`🔑 Anti-Captcha Key: 3582d06717ccd04bf3290f5c1799bc70`);
+  console.log(`📦 Endpoints disponíveis: /scrape e /scrape-batch`);
 });
