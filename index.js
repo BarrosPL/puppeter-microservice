@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/', (req, res) => {
-  res.send('Puppeteer scraper - 10 sublinks 🚀');
+  res.send('Puppeteer scraper - URL principal preservada 🚀');
 });
 
 app.post('/scrape', async (req, res) => {
@@ -132,7 +132,7 @@ app.post('/scrape', async (req, res) => {
           }
         })
         .filter(href => href && href.startsWith(origin))
-        .slice(0, 10); // ✅ MUDADO: 10 links internos
+        .slice(0, 10);
     });
 
     await browser.close();
@@ -161,7 +161,7 @@ app.post('/scrape', async (req, res) => {
   }
 });
 
-// ✅ ENDPOINT DE SCRAPING EM LOTE ATUALIZADO - 10 SUBLINKS
+// ✅ ENDPOINT DE SCRAPING EM LOTE CORRIGIDO - URL PRINCIPAL PRESERVADA
 app.post('/scrape-batch', async (req, res) => {
   console.log('📦 Recebendo requisição de scraping em lote...');
   
@@ -174,8 +174,17 @@ app.post('/scrape-batch', async (req, res) => {
     });
   }
 
-  // 🔥 IDENTIFICAR URL PRINCIPAL
-  const mainUrl = main_url || original_url || urls[0];
+  // 🔥 CORREÇÃO CRÍTICA: NUNCA usar urls[0] como fallback
+  const mainUrl = main_url || original_url;
+  
+  if (!mainUrl) {
+    console.log('❌ ERRO: URL principal não fornecida (main_url ou original_url é obrigatória)');
+    return res.status(400).json({
+      success: false,
+      error: 'URL principal (main_url ou original_url) é obrigatória para identificar a origem do scraping'
+    });
+  }
+
   console.log(`🎯 Processando ${urls.length} sublinks da URL principal: ${mainUrl}`);
   console.log(`📝 Instruções: ${instructions}`);
 
@@ -200,14 +209,13 @@ app.post('/scrape-batch', async (req, res) => {
     browser = await puppeteer.launch(browserConfig);
 
     const results = [];
-    // ✅ MUDADO: Processar até 10 sublinks (conforme case study)
     const urlsToProcess = urls.slice(0, 10);
 
     for (let i = 0; i < urlsToProcess.length; i++) {
       const url = urlsToProcess[i];
       
       try {
-        console.log(`🌐 [${i + 1}/${urlsToProcess.length}] Processando sublink: ${url}`);
+        console.log(`🌐 [${i + 1}/${urlsToProcess.length}] Processando sublink: ${url} (URL principal: ${mainUrl})`);
         
         const page = await browser.newPage();
         
@@ -247,7 +255,7 @@ app.post('/scrape-batch', async (req, res) => {
           results.push({
             success: false,
             url: url,
-            main_url: mainUrl,
+            main_url: mainUrl, // ← PRESERVAR URL PRINCIPAL
             error: 'CAPTCHA detected',
             skipped: true,
             instructions: instructions
@@ -281,7 +289,7 @@ app.post('/scrape-batch', async (req, res) => {
               }
             })
             .filter(href => href && href.startsWith('http'))
-            .slice(0, 5); // Cada sublink pode ter até 5 links internos
+            .slice(0, 5);
         });
 
         await page.close();
@@ -289,8 +297,8 @@ app.post('/scrape-batch', async (req, res) => {
         results.push({
           success: true,
           url: url,
-          main_url: mainUrl,
-          original_url: mainUrl,
+          main_url: mainUrl, // ← PRESERVAR URL PRINCIPAL
+          original_url: mainUrl, // ← PRESERVAR URL PRINCIPAL
           mainContent: text,
           contentLength: text.length,
           links: links,
@@ -305,15 +313,15 @@ app.post('/scrape-batch', async (req, res) => {
         results.push({
           success: false,
           url: url,
-          main_url: mainUrl,
+          main_url: mainUrl, // ← PRESERVAR URL PRINCIPAL MESMO NO ERRO
           error: error.message,
           instructions: instructions
         });
       }
 
-      // Pequena pausa entre requests (reduzida para processar mais rápido)
+      // Pequena pausa entre requests
       if (i < urlsToProcess.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1500)); // ✅ 1.5s entre requests
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
     }
 
@@ -329,8 +337,8 @@ app.post('/scrape-batch', async (req, res) => {
     res.json({
       success: true,
       method: 'puppeteer-batch',
-      main_url: mainUrl,
-      original_url: mainUrl,
+      main_url: mainUrl, // ← PRESERVAR URL PRINCIPAL
+      original_url: mainUrl, // ← PRESERVAR URL PRINCIPAL
       urlsProcessed: urlsToProcess.length,
       successfulScrapes: successfulScrapes.length,
       failedScrapes: results.length - successfulScrapes.length,
@@ -349,7 +357,7 @@ app.post('/scrape-batch', async (req, res) => {
       success: false,
       error: 'Erro no scraping em lote: ' + error.message,
       method: 'puppeteer-batch',
-      main_url: main_url || 'unknown',
+      main_url: main_url || 'unknown', // ← PRESERVAR URL PRINCIPAL
       instructions: instructions
     });
   }
@@ -358,6 +366,6 @@ app.post('/scrape-batch', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Puppeteer scraper running on port ${PORT}`);
-  console.log(`🔗 Processa até 10 sublinks (conforme case study)`);
-  console.log(`⏱️  Pausa de 1.5s entre requests para performance`);
+  console.log(`🔗 Preserva URL principal em todos os sublinks`);
+  console.log(`❌ NUNCA usa sublinks como URL principal`);
 });
