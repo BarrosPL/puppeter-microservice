@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/', (req, res) => {
-  res.send('Puppeteer scraper with Anti-Captcha integration 🚀');
+  res.send('Puppeteer scraper - 10 sublinks 🚀');
 });
 
 app.post('/scrape', async (req, res) => {
@@ -17,7 +17,6 @@ app.post('/scrape', async (req, res) => {
   try {
     const executablePath = await chromium.executablePath();
     
-    // ✅ CONFIGURAÇÃO ROBUSTA PARA EVITAR ETXTBSY
     const browserConfig = {
       args: [
         ...chromium.args,
@@ -28,22 +27,20 @@ app.post('/scrape', async (req, res) => {
         '--single-process'
       ],
       executablePath,
-      headless: true, // Forçar headless
+      headless: true,
       ignoreHTTPSErrors: true
     };
 
-    console.log('🚀 Iniciando browser com configuração robusta...');
+    console.log('🚀 Iniciando browser...');
     browser = await puppeteer.launch(browserConfig);
 
     const page = await browser.newPage();
     
-    // ✅ CONFIGURAR BLOQUEIO DE RECURSOS DESNECESSÁRIOS
     await page.setRequestInterception(true);
     page.on('request', (request) => {
       const resourceType = request.resourceType();
       const requestUrl = request.url().toLowerCase();
       
-      // Bloquear imagens, vídeos, fonts, CSS e arquivos baixáveis
       const blockedTypes = ['image', 'media', 'font', 'stylesheet'];
       const blockedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.avi', '.mov', '.pdf', '.zip', '.rar'];
       
@@ -57,16 +54,15 @@ app.post('/scrape', async (req, res) => {
       }
     });
     
-    // Configurar user agent para parecer mais legítimo
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
     console.log(`🌐 Navegando para: ${url}`);
     await page.goto(url, { 
-      waitUntil: 'networkidle2', // ✅ Mudar para networkidle2
-      timeout: 15000 // ✅ Reduzir timeout
+      waitUntil: 'networkidle2',
+      timeout: 15000
     });
 
-    // ✅ DETECÇÃO SIMPLIFICADA DE CAPTCHA
+    // ✅ DETECÇÃO DE CAPTCHA
     const captchaInfo = await page.evaluate(() => {
       const captchaImage = document.querySelector('img[src*="captcha"], img[alt*="captcha"], img[src*="CAPTCHA"]');
       const captchaInput = document.querySelector('input[name*="captcha"], input[id*="captcha"], input[name*="Captcha"]');
@@ -81,9 +77,8 @@ app.post('/scrape', async (req, res) => {
     });
 
     console.log('🔍 CAPTCHA Analysis:', captchaInfo);
-    console.log('📝 Instructions:', instructions);
 
-    // ✅ SE TEM CAPTCHA COMPLEXO (reCAPTCHA), EVITAR
+    // ✅ SE TEM CAPTCHA COMPLEXO, EVITAR
     if (captchaInfo.hasRecaptcha) {
       await browser.close();
       return res.json({ 
@@ -106,11 +101,10 @@ app.post('/scrape', async (req, res) => {
       });
     }
 
-    // ✅ SUCESSO - EXTRAIR CONTEÚDO SIMPLES
+    // ✅ SUCESSO - EXTRAIR CONTEÚDO
     console.log('✅ CAPTCHA resolved, extracting content...');
     
     const text = await page.evaluate(() => {
-      // Limpar elementos indesejados
       const unwanted = ['script', 'style', 'nav', 'header', 'footer', 'aside'];
       unwanted.forEach(selector => {
         const elements = document.querySelectorAll(selector);
@@ -126,7 +120,6 @@ app.post('/scrape', async (req, res) => {
         .map(a => {
           try {
             const href = a.href;
-            // Resolver URLs relativas
             if (href.startsWith('/')) {
               return origin + href;
             }
@@ -139,7 +132,7 @@ app.post('/scrape', async (req, res) => {
           }
         })
         .filter(href => href && href.startsWith(origin))
-        .slice(0, 10);
+        .slice(0, 10); // ✅ MUDADO: 10 links internos
     });
 
     await browser.close();
@@ -148,6 +141,7 @@ app.post('/scrape', async (req, res) => {
       captcha: false, 
       text, 
       links,
+      url: url,
       instructions: instructions,
       success: true,
       contentLength: text.length,
@@ -158,7 +152,6 @@ app.post('/scrape', async (req, res) => {
     console.error('❌ Error in scraper:', err.message);
     if (browser) await browser.close();
     
-    // ✅ RESPOSTA DE ERRO MAIS INFORMATIVA
     res.status(500).json({ 
       success: false,
       error: `Scraping failed: ${err.message}`,
@@ -168,11 +161,11 @@ app.post('/scrape', async (req, res) => {
   }
 });
 
-// ✅ ENDPOINT DE SCRAPING EM LOTE ATUALIZADO
+// ✅ ENDPOINT DE SCRAPING EM LOTE ATUALIZADO - 10 SUBLINKS
 app.post('/scrape-batch', async (req, res) => {
   console.log('📦 Recebendo requisição de scraping em lote...');
   
-  const { urls, instructions } = req.body;
+  const { urls, instructions, main_url, original_url } = req.body;
   
   if (!urls || !Array.isArray(urls) || urls.length === 0) {
     return res.status(400).json({ 
@@ -181,13 +174,15 @@ app.post('/scrape-batch', async (req, res) => {
     });
   }
 
-  console.log(`🎯 Processando ${urls.length} URLs com instruções: ${instructions}`);
+  // 🔥 IDENTIFICAR URL PRINCIPAL
+  const mainUrl = main_url || original_url || urls[0];
+  console.log(`🎯 Processando ${urls.length} sublinks da URL principal: ${mainUrl}`);
+  console.log(`📝 Instruções: ${instructions}`);
 
   let browser;
   try {
     const executablePath = await chromium.executablePath();
     
-    // ✅ CONFIGURAÇÃO ROBUSTA PARA O LOTE TAMBÉM
     const browserConfig = {
       args: [
         ...chromium.args,
@@ -205,17 +200,17 @@ app.post('/scrape-batch', async (req, res) => {
     browser = await puppeteer.launch(browserConfig);
 
     const results = [];
-    const urlsToProcess = urls.slice(0, 3); // ✅ Reduzir para 3 URLs
+    // ✅ MUDADO: Processar até 10 sublinks (conforme case study)
+    const urlsToProcess = urls.slice(0, 10);
 
     for (let i = 0; i < urlsToProcess.length; i++) {
       const url = urlsToProcess[i];
       
       try {
-        console.log(`🌐 [${i + 1}/${urlsToProcess.length}] Processando: ${url}`);
+        console.log(`🌐 [${i + 1}/${urlsToProcess.length}] Processando sublink: ${url}`);
         
         const page = await browser.newPage();
         
-        // ✅ BLOQUEAR RECURSOS DESNECESSÁRIOS NO LOTE
         await page.setRequestInterception(true);
         page.on('request', (request) => {
           const resourceType = request.resourceType();
@@ -236,8 +231,8 @@ app.post('/scrape-batch', async (req, res) => {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         
         await page.goto(url, { 
-          waitUntil: 'networkidle2', // ✅ Mudar para networkidle2
-          timeout: 10000 // ✅ Reduzir timeout
+          waitUntil: 'networkidle2',
+          timeout: 10000
         });
 
         // Verificação rápida de CAPTCHA
@@ -252,6 +247,7 @@ app.post('/scrape-batch', async (req, res) => {
           results.push({
             success: false,
             url: url,
+            main_url: mainUrl,
             error: 'CAPTCHA detected',
             skipped: true,
             instructions: instructions
@@ -285,7 +281,7 @@ app.post('/scrape-batch', async (req, res) => {
               }
             })
             .filter(href => href && href.startsWith('http'))
-            .slice(0, 5);
+            .slice(0, 5); // Cada sublink pode ter até 5 links internos
         });
 
         await page.close();
@@ -293,6 +289,8 @@ app.post('/scrape-batch', async (req, res) => {
         results.push({
           success: true,
           url: url,
+          main_url: mainUrl,
+          original_url: mainUrl,
           mainContent: text,
           contentLength: text.length,
           links: links,
@@ -300,21 +298,22 @@ app.post('/scrape-batch', async (req, res) => {
           instructions: instructions
         });
 
-        console.log(`✅ URL ${i + 1} processada com sucesso`);
+        console.log(`✅ Sublink ${i + 1} processado com sucesso`);
 
       } catch (error) {
-        console.log(`❌ Erro processando URL ${i + 1}:`, error.message);
+        console.log(`❌ Erro processando sublink ${i + 1}:`, error.message);
         results.push({
           success: false,
           url: url,
+          main_url: mainUrl,
           error: error.message,
           instructions: instructions
         });
       }
 
-      // Pequena pausa entre requests
+      // Pequena pausa entre requests (reduzida para processar mais rápido)
       if (i < urlsToProcess.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 2000)); // ✅ Aumentar pausa
+        await new Promise(resolve => setTimeout(resolve, 1500)); // ✅ 1.5s entre requests
       }
     }
 
@@ -330,6 +329,8 @@ app.post('/scrape-batch', async (req, res) => {
     res.json({
       success: true,
       method: 'puppeteer-batch',
+      main_url: mainUrl,
+      original_url: mainUrl,
       urlsProcessed: urlsToProcess.length,
       successfulScrapes: successfulScrapes.length,
       failedScrapes: results.length - successfulScrapes.length,
@@ -348,6 +349,7 @@ app.post('/scrape-batch', async (req, res) => {
       success: false,
       error: 'Erro no scraping em lote: ' + error.message,
       method: 'puppeteer-batch',
+      main_url: main_url || 'unknown',
       instructions: instructions
     });
   }
@@ -356,7 +358,6 @@ app.post('/scrape-batch', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Puppeteer scraper running on port ${PORT}`);
-  console.log(`🚫 Bloqueia: imagens, vídeos, CSS, fonts e arquivos baixáveis`);
-  console.log(`📝 Segue instruções da planilha`);
-  console.log(`🔧 Configuração robusta para evitar ETXTBSY`);
+  console.log(`🔗 Processa até 10 sublinks (conforme case study)`);
+  console.log(`⏱️  Pausa de 1.5s entre requests para performance`);
 });
