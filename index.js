@@ -34,7 +34,7 @@ const getBrowserConfig = () => {
     headless: chromium.headless,
     ignoreHTTPSErrors: true,
     ignoreDefaultArgs: ['--disable-extensions'],
-    dumpio: false // 🔥 IMPORTANTE: Evitar conflitos de arquivo
+    dumpio: false
   };
 };
 
@@ -65,7 +65,6 @@ const launchBrowserSafely = async () => {
         throw new Error(`Falha após ${maxAttempts} tentativas: ${error.message}`);
       }
       
-      // Aguardar antes de tentar novamente
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }
@@ -79,12 +78,9 @@ app.post('/scrape', async (req, res) => {
   try {
     console.log(`🌐 Iniciando scraping para: ${url}`);
     
-    // 🔥 USAR FUNÇÃO SEGURA PARA INICIAR BROWSER
     browser = await launchBrowserSafely();
-
     const page = await browser.newPage();
     
-    // 🔥 CONFIGURAÇÕES DE PERFORMANCE
     await page.setDefaultNavigationTimeout(30000);
     await page.setDefaultTimeout(15000);
     
@@ -110,15 +106,13 @@ app.post('/scrape', async (req, res) => {
     
     console.log(`🌐 Navegando para: ${url}`);
     
-    // 🔥 NAVEGAÇÃO MAIS ROBUSTA
     try {
       await page.goto(url, { 
-        waitUntil: 'domcontentloaded', // 🔥 Mudar para domcontentloaded
+        waitUntil: 'domcontentloaded',
         timeout: 20000
       });
     } catch (navError) {
       console.log('⚠️ Timeout na navegação, tentando continuar...');
-      // Continuar mesmo com timeout
     }
 
     const captchaInfo = await page.evaluate(() => {
@@ -169,39 +163,20 @@ app.post('/scrape', async (req, res) => {
       return document.body.innerText;
     });
 
-    const links = await page.evaluate(() => {
-      const origin = window.location.origin;
-      const allLinks = Array.from(document.querySelectorAll('a[href]'));
-      return allLinks
-        .map(a => {
-          try {
-            const href = a.href;
-            if (href.startsWith('/')) {
-              return origin + href;
-            }
-            if (href.startsWith('./')) {
-              return origin + href.slice(1);
-            }
-            return href;
-          } catch (e) {
-            return null;
-          }
-        })
-        .filter(href => href && href.startsWith(origin))
-        .slice(0, 10);
-    });
+    // 🔥 REMOVIDO: Extração de links (não precisamos mais)
+    console.log('✅ Conteúdo extraído, sem busca por novos links');
 
     await browser.close();
     
     res.json({ 
       captcha: false, 
       text, 
-      links,
+      links: [], // 🔥 RETORNAR ARRAY VAZIO - SEM NOVOS LINKS
       url: url,
       instructions: instructions,
       success: true,
       contentLength: text.length,
-      linksFound: links.length
+      linksFound: 0 // 🔥 ZERO LINKS ENCONTRADOS
     });
     
   } catch (err) {
@@ -217,7 +192,7 @@ app.post('/scrape', async (req, res) => {
   }
 });
 
-// 🔥 MESMAS CORREÇÕES PARA O SCRAPE-BATCH
+// 🔥 SCRAPE-BATCH MODIFICADO - APENAS CONTEÚDO, SEM NOVOS LINKS
 app.post('/scrape-batch', async (req, res) => {
   console.log('📦 Recebendo requisição de scraping em lote...');
   
@@ -240,21 +215,20 @@ app.post('/scrape-batch', async (req, res) => {
     });
   }
 
-  console.log(`🎯 Processando ${urls.length} sublinks da URL principal: ${mainUrl}`);
+  console.log(`🎯 Processando ${urls.length} sublinks APENAS para conteúdo`);
+  console.log(`🌐 URL principal: ${mainUrl}`);
 
   let browser;
   try {
-    // 🔥 USAR FUNÇÃO SEGURA
     browser = await launchBrowserSafely();
-
     const results = [];
-    const urlsToProcess = urls.slice(0, 10);
+    const urlsToProcess = urls; // Limitar para performance
 
     for (let i = 0; i < urlsToProcess.length; i++) {
       const url = urlsToProcess[i];
       
       try {
-        console.log(`🌐 [${i + 1}/${urlsToProcess.length}] Processando sublink: ${url}`);
+        console.log(`🌐 [${i + 1}/${urlsToProcess.length}] Extraindo conteúdo de: ${url}`);
         
         const page = await browser.newPage();
         await page.setDefaultNavigationTimeout(20000);
@@ -308,6 +282,7 @@ app.post('/scrape-batch', async (req, res) => {
           continue;
         }
 
+        // 🔥 APENAS EXTRAIR CONTEÚDO - SEM BUSCAR NOVOS LINKS
         const text = await page.evaluate(() => {
           const unwanted = ['script', 'style', 'nav', 'header', 'footer', 'aside'];
           unwanted.forEach(selector => {
@@ -317,26 +292,9 @@ app.post('/scrape-batch', async (req, res) => {
           return document.body.innerText;
         });
 
-        const links = await page.evaluate(() => {
-          const origin = window.location.origin;
-          const allLinks = Array.from(document.querySelectorAll('a[href]'));
-          return allLinks
-            .map(a => {
-              try {
-                const href = a.href;
-                if (href.startsWith('/')) return origin + href;
-                if (href.startsWith('./')) return origin + href.slice(1);
-                return href;
-              } catch (e) {
-                return null;
-              }
-            })
-            .filter(href => href && href.startsWith('http'))
-            .slice(0, 5);
-        });
-
         await page.close();
 
+        // 🔥 RESULTADO SIMPLIFICADO - SEM LINKS
         results.push({
           success: true,
           url: url,
@@ -344,12 +302,12 @@ app.post('/scrape-batch', async (req, res) => {
           original_url: mainUrl,
           mainContent: text,
           contentLength: text.length,
-          links: links,
-          linksFound: links.length,
+          links: [], // 🔥 ARRAY VAZIO
+          linksFound: 0, // 🔥 ZERO
           instructions: instructions
         });
 
-        console.log(`✅ Sublink ${i + 1} processado com sucesso`);
+        console.log(`✅ Conteúdo extraído de ${i + 1} (${text.length} chars)`);
 
       } catch (error) {
         console.log(`❌ Erro processando sublink ${i + 1}:`, error.message);
@@ -375,10 +333,11 @@ app.post('/scrape-batch', async (req, res) => {
       .join('\n\n');
 
     console.log(`✅ Lote finalizado: ${successfulScrapes.length}/${urlsToProcess.length} sucessos`);
+    console.log(`📊 Total de conteúdo: ${combinedContent.length} caracteres`);
 
     res.json({
       success: true,
-      method: 'puppeteer-batch',
+      method: 'puppeteer-batch-content-only', // 🔥 INDICAR MUDANÇA
       main_url: mainUrl,
       original_url: mainUrl,
       urlsProcessed: urlsToProcess.length,
@@ -388,6 +347,7 @@ app.post('/scrape-batch', async (req, res) => {
       totalContentLength: combinedContent.length,
       individualResults: results,
       instructions: instructions,
+      content_only: true, // 🔥 FLAG PARA INDICAR QUE É APENAS CONTEÚDO
       timestamp: new Date().toISOString()
     });
 
@@ -408,5 +368,5 @@ app.post('/scrape-batch', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Puppeteer scraper running on port ${PORT}`);
-  console.log(`🔧 Configuração robusta para evitar ETXTBSY`);
+  console.log(`🔧 Modo: Apenas conteúdo - sem extrair novos links`);
 });
