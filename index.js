@@ -6,8 +6,70 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/', (req, res) => {
-  res.send('Puppeteer scraper - URL principal preservada 🚀');
+  res.send('Puppeteer scraper - Configuração robusta 🚀');
 });
+
+// 🔥 CONFIGURAÇÃO GLOBAL DO CHROMIUM
+const getBrowserConfig = () => {
+  return {
+    args: [
+      ...chromium.args,
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--single-process',
+      '--no-zygote',
+      '--disable-web-security',
+      '--disable-features=VizDisplayCompositor',
+      '--disable-software-rasterizer',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-ipc-flooding-protection'
+    ],
+    executablePath: process.env.IS_LOCAL ? 
+      '/usr/bin/chromium-browser' : 
+      chromium.executablePath,
+    headless: chromium.headless,
+    ignoreHTTPSErrors: true,
+    ignoreDefaultArgs: ['--disable-extensions'],
+    dumpio: false // 🔥 IMPORTANTE: Evitar conflitos de arquivo
+  };
+};
+
+// 🔥 FUNÇÃO PARA INICIAR BROWSER DE FORMA SEGURA
+const launchBrowserSafely = async () => {
+  let browser = null;
+  let attempts = 0;
+  const maxAttempts = 3;
+  
+  while (attempts < maxAttempts) {
+    try {
+      console.log(`🚀 Tentativa ${attempts + 1} de iniciar browser...`);
+      const executablePath = await chromium.executablePath();
+      console.log(`🔧 Executable path: ${executablePath}`);
+      
+      const browserConfig = getBrowserConfig();
+      browserConfig.executablePath = executablePath;
+      
+      browser = await puppeteer.launch(browserConfig);
+      console.log('✅ Browser iniciado com sucesso');
+      return browser;
+      
+    } catch (error) {
+      attempts++;
+      console.error(`❌ Erro na tentativa ${attempts}:`, error.message);
+      
+      if (attempts >= maxAttempts) {
+        throw new Error(`Falha após ${maxAttempts} tentativas: ${error.message}`);
+      }
+      
+      // Aguardar antes de tentar novamente
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+};
 
 app.post('/scrape', async (req, res) => {
   const { url, instructions, captchaSolution } = req.body;
@@ -15,26 +77,16 @@ app.post('/scrape', async (req, res) => {
 
   let browser;
   try {
-    const executablePath = await chromium.executablePath();
+    console.log(`🌐 Iniciando scraping para: ${url}`);
     
-    const browserConfig = {
-      args: [
-        ...chromium.args,
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--single-process'
-      ],
-      executablePath,
-      headless: true,
-      ignoreHTTPSErrors: true
-    };
-
-    console.log('🚀 Iniciando browser...');
-    browser = await puppeteer.launch(browserConfig);
+    // 🔥 USAR FUNÇÃO SEGURA PARA INICIAR BROWSER
+    browser = await launchBrowserSafely();
 
     const page = await browser.newPage();
+    
+    // 🔥 CONFIGURAÇÕES DE PERFORMANCE
+    await page.setDefaultNavigationTimeout(30000);
+    await page.setDefaultTimeout(15000);
     
     await page.setRequestInterception(true);
     page.on('request', (request) => {
@@ -57,10 +109,17 @@ app.post('/scrape', async (req, res) => {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
     console.log(`🌐 Navegando para: ${url}`);
-    await page.goto(url, { 
-      waitUntil: 'networkidle2',
-      timeout: 15000
-    });
+    
+    // 🔥 NAVEGAÇÃO MAIS ROBUSTA
+    try {
+      await page.goto(url, { 
+        waitUntil: 'domcontentloaded', // 🔥 Mudar para domcontentloaded
+        timeout: 20000
+      });
+    } catch (navError) {
+      console.log('⚠️ Timeout na navegação, tentando continuar...');
+      // Continuar mesmo com timeout
+    }
 
     const captchaInfo = await page.evaluate(() => {
       const captchaImage = document.querySelector('img[src*="captcha"], img[alt*="captcha"], img[src*="CAPTCHA"]');
@@ -158,7 +217,7 @@ app.post('/scrape', async (req, res) => {
   }
 });
 
-// ✅ ENDPOINT DE SCRAPING EM LOTE CORRIGIDO - URL PRINCIPAL PRESERVADA
+// 🔥 MESMAS CORREÇÕES PARA O SCRAPE-BATCH
 app.post('/scrape-batch', async (req, res) => {
   console.log('📦 Recebendo requisição de scraping em lote...');
   
@@ -171,12 +230,10 @@ app.post('/scrape-batch', async (req, res) => {
     });
   }
 
-  // 🔥 CORREÇÃO CRÍTICA: REMOVER urls[0] COMO FALLBACK
   const mainUrl = main_url || original_url;
   
   if (!mainUrl) {
     console.log('❌ ERRO: URL principal não fornecida');
-    console.log('🔍 Dados recebidos:', { main_url, original_url, urls_count: urls.length });
     return res.status(400).json({
       success: false,
       error: 'URL principal (main_url ou original_url) é obrigatória'
@@ -184,27 +241,11 @@ app.post('/scrape-batch', async (req, res) => {
   }
 
   console.log(`🎯 Processando ${urls.length} sublinks da URL principal: ${mainUrl}`);
-  console.log(`📝 Instruções: ${instructions}`);
 
   let browser;
   try {
-    const executablePath = await chromium.executablePath();
-    
-    const browserConfig = {
-      args: [
-        ...chromium.args,
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--single-process'
-      ],
-      executablePath,
-      headless: true,
-      ignoreHTTPSErrors: true
-    };
-
-    browser = await puppeteer.launch(browserConfig);
+    // 🔥 USAR FUNÇÃO SEGURA
+    browser = await launchBrowserSafely();
 
     const results = [];
     const urlsToProcess = urls.slice(0, 10);
@@ -216,6 +257,8 @@ app.post('/scrape-batch', async (req, res) => {
         console.log(`🌐 [${i + 1}/${urlsToProcess.length}] Processando sublink: ${url}`);
         
         const page = await browser.newPage();
+        await page.setDefaultNavigationTimeout(20000);
+        await page.setDefaultTimeout(15000);
         
         await page.setRequestInterception(true);
         page.on('request', (request) => {
@@ -236,12 +279,15 @@ app.post('/scrape-batch', async (req, res) => {
         
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         
-        await page.goto(url, { 
-          waitUntil: 'networkidle2',
-          timeout: 10000
-        });
+        try {
+          await page.goto(url, { 
+            waitUntil: 'domcontentloaded',
+            timeout: 15000
+          });
+        } catch (navError) {
+          console.log(`⚠️ Timeout navegando para ${url}, continuando...`);
+        }
 
-        // Verificação rápida de CAPTCHA
         const hasCaptcha = await page.evaluate(() => {
           const bodyText = document.body.innerText.toLowerCase();
           return bodyText.includes('captcha') || 
@@ -253,7 +299,7 @@ app.post('/scrape-batch', async (req, res) => {
           results.push({
             success: false,
             url: url,
-            main_url: mainUrl, // ← REPASSAR URL PRINCIPAL
+            main_url: mainUrl,
             error: 'CAPTCHA detected',
             skipped: true,
             instructions: instructions
@@ -262,7 +308,6 @@ app.post('/scrape-batch', async (req, res) => {
           continue;
         }
 
-        // Extrair conteúdo simples
         const text = await page.evaluate(() => {
           const unwanted = ['script', 'style', 'nav', 'header', 'footer', 'aside'];
           unwanted.forEach(selector => {
@@ -295,8 +340,8 @@ app.post('/scrape-batch', async (req, res) => {
         results.push({
           success: true,
           url: url,
-          main_url: mainUrl, // ← REPASSAR URL PRINCIPAL
-          original_url: mainUrl, // ← REPASSAR URL PRINCIPAL
+          main_url: mainUrl,
+          original_url: mainUrl,
           mainContent: text,
           contentLength: text.length,
           links: links,
@@ -311,15 +356,14 @@ app.post('/scrape-batch', async (req, res) => {
         results.push({
           success: false,
           url: url,
-          main_url: mainUrl, // ← REPASSAR URL PRINCIPAL MESMO NO ERRO
+          main_url: mainUrl,
           error: error.message,
           instructions: instructions
         });
       }
 
-      // Pequena pausa entre requests
       if (i < urlsToProcess.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
 
@@ -335,8 +379,8 @@ app.post('/scrape-batch', async (req, res) => {
     res.json({
       success: true,
       method: 'puppeteer-batch',
-      main_url: mainUrl, // ← REPASSAR URL PRINCIPAL
-      original_url: mainUrl, // ← REPASSAR URL PRINCIPAL
+      main_url: mainUrl,
+      original_url: mainUrl,
       urlsProcessed: urlsToProcess.length,
       successfulScrapes: successfulScrapes.length,
       failedScrapes: results.length - successfulScrapes.length,
@@ -355,7 +399,7 @@ app.post('/scrape-batch', async (req, res) => {
       success: false,
       error: 'Erro no scraping em lote: ' + error.message,
       method: 'puppeteer-batch',
-      main_url: main_url || 'unknown', // ← REPASSAR URL PRINCIPAL
+      main_url: main_url || 'unknown',
       instructions: instructions
     });
   }
@@ -364,6 +408,5 @@ app.post('/scrape-batch', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Puppeteer scraper running on port ${PORT}`);
-  console.log(`🔗 Preserva URL principal em todos os sublinks`);
-  console.log(`❌ NUNCA usa sublinks como URL principal`);
+  console.log(`🔧 Configuração robusta para evitar ETXTBSY`);
 });
