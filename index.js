@@ -38,8 +38,16 @@ const getBrowserConfig = () => {
   };
 };
 
-// 🔥 FUNÇÃO PARA INICIAR BROWSER DE FORMA SEGURA
+// 🔥🔥🔥 SOLUÇÃO PARA ETXTBSY - SINGLETON PATTERN
+let browserInstance = null;
+
 const launchBrowserSafely = async () => {
+  // ✅ REUTILIZAR BROWSER SE JÁ ESTIVER ABERTO
+  if (browserInstance && browserInstance.process() != null) {
+    console.log('🔁 Reutilizando instância existente do browser');
+    return browserInstance;
+  }
+  
   let browser = null;
   let attempts = 0;
   const maxAttempts = 3;
@@ -47,28 +55,76 @@ const launchBrowserSafely = async () => {
   while (attempts < maxAttempts) {
     try {
       console.log(`🚀 Tentativa ${attempts + 1} de iniciar browser...`);
+      
+      // ✅ FORÇAR FECHAMENTO DE PROCESSOS ANTIGOS
+      if (browserInstance) {
+        try {
+          await browserInstance.close();
+        } catch (e) {
+          console.log('⚠️ Não foi possível fechar instância anterior');
+        }
+        browserInstance = null;
+      }
+      
       const executablePath = await chromium.executablePath();
       console.log(`🔧 Executable path: ${executablePath}`);
       
       const browserConfig = getBrowserConfig();
       browserConfig.executablePath = executablePath;
       
+      // ✅ CONFIGURAÇÃO ESPECÍFICA PARA ETXTBSY
+      browserConfig.dumpio = true; // Debug
+      browserConfig.handleSIGINT = false;
+      browserConfig.handleSIGTERM = false;
+      browserConfig.handleSIGHUP = false;
+      
       browser = await puppeteer.launch(browserConfig);
       console.log('✅ Browser iniciado com sucesso');
+      
+      // ✅ SALVAR INSTÂNCIA PARA REUTILIZAR
+      browserInstance = browser;
       return browser;
       
     } catch (error) {
       attempts++;
       console.error(`❌ Erro na tentativa ${attempts}:`, error.message);
       
+      // ✅ LIMPAR SE HOUVER FALHA
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (e) {}
+        browser = null;
+      }
+      
       if (attempts >= maxAttempts) {
         throw new Error(`Falha após ${maxAttempts} tentativas: ${error.message}`);
       }
       
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // ✅ AGUARDAR MAIS TEMPO ENTRE TENTATIVAS
+      await new Promise(resolve => setTimeout(resolve, 3000 * attempts));
     }
   }
 };
+
+// 🔥 FUNÇÃO PARA FECHAR BROWSER GLOBALMENTE
+const closeGlobalBrowser = async () => {
+  if (browserInstance) {
+    try {
+      await browserInstance.close();
+      browserInstance = null;
+      console.log('🔒 Browser global fechado');
+    } catch (error) {
+      console.log('⚠️ Erro ao fechar browser global:', error.message);
+    }
+  }
+};
+
+// 🔥 ENDPOINT PARA LIMPEZA MANUAL (opcional)
+app.post('/cleanup', async (req, res) => {
+  await closeGlobalBrowser();
+  res.json({ success: true, message: 'Browser cleanup completed' });
+});
 
 app.post('/scrape', async (req, res) => {
   const { url, instructions, captchaSolution } = req.body;
@@ -78,6 +134,7 @@ app.post('/scrape', async (req, res) => {
   try {
     console.log(`🌐 Iniciando scraping PRINCIPAL para: ${url}`);
     
+    // 🔥 USAR FUNÇÃO CORRIGIDA PARA ETXTBSY
     browser = await launchBrowserSafely();
     const page = await browser.newPage();
     
@@ -131,7 +188,8 @@ app.post('/scrape', async (req, res) => {
     console.log('🔍 CAPTCHA Analysis:', captchaInfo);
 
     if (captchaInfo.hasRecaptcha) {
-      await browser.close();
+      // 🔥 NÃO FECHAR BROWSER GLOBAL APENAS A PÁGINA
+      await page.close();
       return res.json({ 
         captcha: true,
         captchaType: 'recaptcha',
@@ -142,7 +200,7 @@ app.post('/scrape', async (req, res) => {
 
     if (captchaInfo.hasCaptcha) {
       console.log('🛡️ CAPTCHA detected, returning early...');
-      await browser.close();
+      await page.close();
       return res.json({ 
         captcha: true,
         captchaType: 'simple',
@@ -186,7 +244,8 @@ app.post('/scrape', async (req, res) => {
         .slice(0, 10);
     });
 
-    await browser.close();
+    // 🔥 FECHAR APENAS A PÁGINA, NÃO O BROWSER
+    await page.close();
     
     res.json({ 
       captcha: false, 
@@ -201,7 +260,8 @@ app.post('/scrape', async (req, res) => {
     
   } catch (err) {
     console.error('❌ Error in scraper:', err.message);
-    if (browser) await browser.close();
+    // 🔥 EM CASO DE ERRO, LIMPAR BROWSER GLOBAL
+    await closeGlobalBrowser();
     
     res.status(500).json({ 
       success: false,
@@ -240,6 +300,7 @@ app.post('/scrape-batch', async (req, res) => {
 
   let browser;
   try {
+    // 🔥 USAR FUNÇÃO CORRIGIDA
     browser = await launchBrowserSafely();
     const results = [];
     const urlsToProcess = urls.slice(0, 10);
@@ -345,14 +406,15 @@ app.post('/scrape-batch', async (req, res) => {
       }
     }
 
-    await browser.close();
+    // 🔥 NÃO FECHAR BROWSER GLOBAL APÓS BATCH
+    console.log('✅ Lote finalizado, browser mantido para reutilização');
 
     const successfulScrapes = results.filter(r => r.success);
     const combinedContent = successfulScrapes
       .map(result => `--- URL: ${result.url} ---\n${result.mainContent}`)
       .join('\n\n');
 
-    console.log(`✅ Lote finalizado: ${successfulScrapes.length}/${urlsToProcess.length} sucessos`);
+    console.log(`📊 Resultado: ${successfulScrapes.length}/${urlsToProcess.length} sucessos`);
     console.log(`📊 Total de conteúdo: ${combinedContent.length} caracteres`);
 
     res.json({
@@ -373,7 +435,8 @@ app.post('/scrape-batch', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Erro geral no scraping em lote:', error.message);
-    if (browser) await browser.close();
+    // 🔥 EM CASO DE ERRO, LIMPAR BROWSER GLOBAL
+    await closeGlobalBrowser();
     
     res.status(500).json({
       success: false,
@@ -389,4 +452,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Puppeteer scraper running on port ${PORT}`);
   console.log(`🔧 Modo: Principal com links | Sublinks apenas conteúdo`);
+  console.log(`🚀 Configurado para evitar ETXTBSY com singleton pattern`);
 });
