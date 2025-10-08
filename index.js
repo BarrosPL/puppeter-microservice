@@ -76,7 +76,7 @@ app.post('/scrape', async (req, res) => {
 
   let browser;
   try {
-    console.log(`🌐 Iniciando scraping para: ${url}`);
+    console.log(`🌐 Iniciando scraping PRINCIPAL para: ${url}`);
     
     browser = await launchBrowserSafely();
     const page = await browser.newPage();
@@ -151,8 +151,8 @@ app.post('/scrape', async (req, res) => {
       });
     }
 
-    // ✅ SUCESSO - EXTRAIR CONTEÚDO
-    console.log('✅ CAPTCHA resolved, extracting content...');
+    // ✅ SCRAPPING PRINCIPAL - MANTEM EXTRAÇÃO DE LINKS
+    console.log('✅ CAPTCHA resolved, extracting content AND links...');
     
     const text = await page.evaluate(() => {
       const unwanted = ['script', 'style', 'nav', 'header', 'footer', 'aside'];
@@ -163,20 +163,40 @@ app.post('/scrape', async (req, res) => {
       return document.body.innerText;
     });
 
-    // 🔥 REMOVIDO: Extração de links (não precisamos mais)
-    console.log('✅ Conteúdo extraído, sem busca por novos links');
+    // 🔥 MANTIDO: Extração de links (APENAS NO PRINCIPAL)
+    const links = await page.evaluate(() => {
+      const origin = window.location.origin;
+      const allLinks = Array.from(document.querySelectorAll('a[href]'));
+      return allLinks
+        .map(a => {
+          try {
+            const href = a.href;
+            if (href.startsWith('/')) {
+              return origin + href;
+            }
+            if (href.startsWith('./')) {
+              return origin + href.slice(1);
+            }
+            return href;
+          } catch (e) {
+            return null;
+          }
+        })
+        .filter(href => href && href.startsWith(origin))
+        .slice(0, 10);
+    });
 
     await browser.close();
     
     res.json({ 
       captcha: false, 
       text, 
-      links: [], // 🔥 RETORNAR ARRAY VAZIO - SEM NOVOS LINKS
+      links, // 🔥 MANTIDO LINKS NO PRINCIPAL
       url: url,
       instructions: instructions,
       success: true,
       contentLength: text.length,
-      linksFound: 0 // 🔥 ZERO LINKS ENCONTRADOS
+      linksFound: links.length // 🔥 MANTIDO CONTAGEM DE LINKS
     });
     
   } catch (err) {
@@ -222,7 +242,7 @@ app.post('/scrape-batch', async (req, res) => {
   try {
     browser = await launchBrowserSafely();
     const results = [];
-    const urlsToProcess = urls; // Limitar para performance
+    const urlsToProcess = urls.slice(0, 10);
 
     for (let i = 0; i < urlsToProcess.length; i++) {
       const url = urlsToProcess[i];
@@ -294,7 +314,7 @@ app.post('/scrape-batch', async (req, res) => {
 
         await page.close();
 
-        // 🔥 RESULTADO SIMPLIFICADO - SEM LINKS
+        // 🔥 RESULTADO SIMPLIFICADO - SEM LINKS (APENAS NO BATCH)
         results.push({
           success: true,
           url: url,
@@ -302,8 +322,8 @@ app.post('/scrape-batch', async (req, res) => {
           original_url: mainUrl,
           mainContent: text,
           contentLength: text.length,
-          links: [], // 🔥 ARRAY VAZIO
-          linksFound: 0, // 🔥 ZERO
+          links: [], // 🔥 ARRAY VAZIO - SEM NOVOS LINKS
+          linksFound: 0, // 🔥 ZERO - SEM NOVOS LINKS
           instructions: instructions
         });
 
@@ -337,7 +357,7 @@ app.post('/scrape-batch', async (req, res) => {
 
     res.json({
       success: true,
-      method: 'puppeteer-batch-content-only', // 🔥 INDICAR MUDANÇA
+      method: 'puppeteer-batch-content-only',
       main_url: mainUrl,
       original_url: mainUrl,
       urlsProcessed: urlsToProcess.length,
@@ -347,7 +367,7 @@ app.post('/scrape-batch', async (req, res) => {
       totalContentLength: combinedContent.length,
       individualResults: results,
       instructions: instructions,
-      content_only: true, // 🔥 FLAG PARA INDICAR QUE É APENAS CONTEÚDO
+      content_only: true,
       timestamp: new Date().toISOString()
     });
 
@@ -368,5 +388,5 @@ app.post('/scrape-batch', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Puppeteer scraper running on port ${PORT}`);
-  console.log(`🔧 Modo: Apenas conteúdo - sem extrair novos links`);
+  console.log(`🔧 Modo: Principal com links | Sublinks apenas conteúdo`);
 });
