@@ -62,7 +62,7 @@ app.post('/scrape', async (req, res) => {
       timeout: 15000
     });
 
-    // ✅ DETECÇÃO DE CAPTCHA
+   
     const captchaInfo = await page.evaluate(() => {
       const captchaImage = document.querySelector('img[src*="captcha"], img[alt*="captcha"], img[src*="CAPTCHA"]');
       const captchaInput = document.querySelector('input[name*="captcha"], input[id*="captcha"], input[name*="Captcha"]');
@@ -78,7 +78,7 @@ app.post('/scrape', async (req, res) => {
 
     console.log('🔍 CAPTCHA Analysis:', captchaInfo);
 
-    // ✅ SE TEM CAPTCHA COMPLEXO, EVITAR
+  
     if (captchaInfo.hasRecaptcha) {
       await browser.close();
       return res.json({ 
@@ -89,7 +89,7 @@ app.post('/scrape', async (req, res) => {
       });
     }
 
-    // ✅ SE TEM CAPTCHA SIMPLES - RETORNAR RAPIDAMENTE
+  
     if (captchaInfo.hasCaptcha) {
       console.log('🛡️ CAPTCHA detected, returning early...');
       await browser.close();
